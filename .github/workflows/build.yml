@@ -6,15 +6,15 @@ on:
       kernel_source:
         description: '🔗 URL kernel source'
         required: true
-        default: 'https://github.com/lynxdevproject/kernel-begonia'
+        default: 'https://github.com/NothingOSS/android_kernel_6.1_nothing_mt6878'
       kernel_branch:
         description: '🌿 Branch kernel source'
         required: true
-        default: 'main'
+        default: 'mt6878/Tetris/16b'
       defconfig:
         description: '🧪 Kernel defconfig'
         required: true
-        default: 'begonia_user_defconfig'
+        default: 'gki_defconfig'
       anykernel:
         description: '📦 Use AnyKernel3 packaging?'
         required: true
@@ -31,11 +31,11 @@ on:
       zip_name:
         description: '📝 Output ZIP base name'
         required: false
-        default: 'ReogKernelSU'
+        default: 'CMF1KernelSU'
       developer:
         description: '👤 Developer name/ID'
         required: false
-        default: 'lynx@workspace'
+        default: 'nobodyatall@workspace'
       enable_kernelsu_next:
         description: '🔘 Enable KernelSU-Next patch?'
         required: true
