@@ -6,15 +6,15 @@ on:
       kernel_source:
         description: '🔗 URL kernel source'
         required: true
-        default: 'https://github.com/NothingOSS/android_kernel_6.1_nothing_mt6878'
+        default: 'https://github.com/crdroidandroid/android_kernel_xiaomi_sm6250'
       kernel_branch:
         description: '🌿 Branch kernel source'
         required: true
-        default: 'mt6878/Tetris/16b'
+        default: '16.0'
       defconfig:
         description: '🧪 Kernel defconfig'
         required: true
-        default: 'gki_defconfig'
+        default: 'vendor/xiaomi/miatoll_defconfig'
       anykernel:
         description: '📦 Use AnyKernel3 packaging?'
         required: true
@@ -31,16 +31,16 @@ on:
       zip_name:
         description: '📝 Output ZIP base name'
         required: false
-        default: 'CMF1KernelSU'
+        default: 'Miatoll-NetHunter-KSU'
       developer:
         description: '👤 Developer name/ID'
         required: false
-        default: 'nobodyatall@workspace'
+        default: 'kb3122'
       enable_kernelsu_next:
         description: '🔘 Enable KernelSU-Next patch?'
         required: true
         type: boolean
-        default: false
+        default: true
 
 jobs:
   build-kernel:
@@ -52,9 +52,14 @@ jobs:
     steps:
       - name: 🧰 Setup Toolchain
         run: |
+          # GCC 4.9 Cross Compilers
           git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9 aarch64-linux-android-4.9
           git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9 arm-linux-androideabi-4.9
-          mkdir clang && curl -s https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/android14-dev/clang-r487747c.tar.gz -RLO && tar -C clang/ -xf clang-*.tar.gz
+          
+          # Clang 19 (r530567) for Android 16 compatibility
+          mkdir clang
+          curl -s "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-r530567.tar.gz" -RLO
+          tar -C clang/ -xf clang-*.tar.gz
 
       - name: ⏱️ Pull Kernel Source
         run: |
@@ -65,6 +70,45 @@ jobs:
         run: |
           git clone --depth=1 https://github.com/KernelSU-Next/KernelSU-Next.git KernelSU
           bash KernelSU/tools/init_kernelsu.sh kernel-source
+
+      - name: 🧪 Inject NetHunter & KSU Manual Hook Defconfigs
+        run: |
+          # Locate the defconfig file inside the kernel source
+          DEFCONFIG="kernel-source/arch/arm64/configs/${{ github.event.inputs.defconfig }}"
+          
+          # Fallback if the defconfig is in a different subfolder
+          if [ ! -f "$DEFCONFIG" ]; then
+            echo "Primary path failed, searching for ${{ github.event.inputs.defconfig }}..."
+            DEFCONFIG=$(find kernel-source -name "$(basename ${{ github.event.inputs.defconfig }})" | head -n 1)
+          fi
+
+          if [ -f "$DEFCONFIG" ]; then
+            echo "Appending configs to $DEFCONFIG"
+            
+            # 1. KernelSU-Next Manual Hook (Required for Zygisk Next on non-GKI)
+            echo "CONFIG_KSU_MANUAL_HOOK=y" >> $DEFCONFIG
+            echo "# CONFIG_KSU_WITH_KPROBES is not set" >> $DEFCONFIG
+            
+            # 2. Zygisk Next Prerequisites
+            echo "CONFIG_OVERLAY_FS=y" >> $DEFCONFIG
+            echo "CONFIG_TMPFS_XATTR=y" >> $DEFCONFIG
+            
+            # 3. NetHunter Core Drivers (Wi-Fi, HID, Bluetooth, SDR)
+            echo "CONFIG_CFG80211=y" >> $DEFCONFIG
+            echo "CONFIG_MAC80211=y" >> $DEFCONFIG
+            echo "CONFIG_ATH9K_HTC=m" >> $DEFCONFIG
+            echo "CONFIG_RTL8188EU=m" >> $DEFCONFIG
+            echo "CONFIG_RTL8812AU=m" >> $DEFCONFIG
+            echo "CONFIG_USB_CONFIGFS_F_HID=y" >> $DEFCONFIG
+            echo "CONFIG_USB_F_HID=y" >> $DEFCONFIG
+            echo "CONFIG_BT_HCIBTUSB=y" >> $DEFCONFIG
+            echo "CONFIG_DVB_USB_RTL28XXU=y" >> $DEFCONFIG
+            
+            echo "Configs appended successfully."
+          else
+            echo "❌ ERROR: Could not locate defconfig: ${{ github.event.inputs.defconfig }}"
+            exit 1
+          fi
 
       - name: ⚙️ Build Kernel
         run: |
