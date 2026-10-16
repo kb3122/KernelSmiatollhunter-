@@ -66,19 +66,71 @@ jobs:
           git clone --depth=1 ${{ github.event.inputs.kernel_source }} -b ${{ github.event.inputs.kernel_branch }} kernel-source
 
       # ============================================================
-      # KernelSU-Next setup — official next-branch script
+      # Inject KernelSU-Next driver (MANUAL symlink — more reliable
+      # than setup.sh on non-GKI kernels where setup.sh fails silently)
       # ============================================================
       - name: 🧙 Inject KernelSU-Next
         if: ${{ github.event.inputs.enable_kernelsu_next }}
         run: |
           cd kernel-source
-          curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -s next
-          echo "=== KernelSU-Next tree after setup ==="
-          ls -la KernelSU-Next/ 2>/dev/null || ls -la KernelSU/ 2>/dev/null || true
-          echo "=== KernelSU-Next Makefile ==="
-          cat KernelSU-Next/kernel/Makefile 2>/dev/null | head -30 || true
-          echo "=== KernelSU-Next Kconfig ==="
-          cat KernelSU-Next/kernel/Kconfig 2>/dev/null | head -40 || true
+
+          # ---- 1. Clone the KernelSU-Next driver ----
+          if [ ! -d "KernelSU-Next" ]; then
+            git clone --depth=1 https://github.com/KernelSU-Next/KernelSU-Next.git KernelSU-Next
+          fi
+          echo "=== KernelSU-Next tree ==="
+          ls -la KernelSU-Next/
+          echo "=== KernelSU-Next/kernel contents ==="
+          ls -la KernelSU-Next/kernel/ | head -30
+
+          # ---- 2. Symlink the driver into drivers/kernelsu ----
+          if [ -e "drivers/kernelsu" ]; then
+            rm -f drivers/kernelsu
+          fi
+          ln -sf ../KernelSU-Next/kernel drivers/kernelsu
+          echo "=== Symlink ==="
+          ls -la drivers/kernelsu
+
+          # ---- 3. Patch drivers/Kconfig to source the KSU Kconfig ----
+          if ! grep -q "drivers/kernelsu/Kconfig" drivers/Kconfig; then
+            echo 'source "drivers/kernelsu/Kconfig"' >> drivers/Kconfig
+          fi
+          echo "=== drivers/Kconfig tail ==="
+          tail -5 drivers/Kconfig
+
+          # ---- 4. Patch drivers/Makefile to build KSU ----
+          if ! grep -q "kernelsu" drivers/Makefile; then
+            echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
+          fi
+          echo "=== drivers/Makefile tail ==="
+          tail -5 drivers/Makefile
+
+          # ---- 5. Sanity check: is the Kconfig symbol visible? ----
+          echo "=== drivers/kernelsu/Kconfig ==="
+          head -60 drivers/kernelsu/Kconfig || echo "ERROR: kernelsu Kconfig not found!"
+
+      # ============================================================
+      # Patch VFS hooks — required for KernelSU to actually activate
+      # ============================================================
+      - name: 🔧 Patch Kernel Source for VFS Hooks
+        if: ${{ github.event.inputs.enable_kernelsu_next }}
+        run: |
+          cd kernel-source
+
+          echo "=== Patching fs/exec.c ==="
+          sed -i 's|^static int do_execveat_common(int fd, struct filename \*filename,|#ifdef CONFIG_KSU\n\textern int ksu_handle_execveat_sucompat(int *fd, struct filename **filename_ptr, void *argv, void *envp, int *flags);\n#endif\nstatic int do_execveat_common(int fd, struct filename *filename,|' fs/exec.c
+
+          echo "=== Patching fs/open.c ==="
+          sed -i 's|^static int do_faccessat(int dfd, const char __user \*filename, int mode,|#ifdef CONFIG_KSU\n\textern int ksu_handle_faccessat(int *dfd, const char __user **filename_user, int *mode, int *flags);\n#endif\nstatic int do_faccessat(int dfd, const char __user *filename, int mode,|' fs/open.c
+
+          echo "=== Patching fs/read_write.c ==="
+          sed -i 's|^ssize_t vfs_read(struct file \*file, char __user \*buf, size_t count, loff_t \*pos)|#ifdef CONFIG_KSU\n\textern int ksu_handle_vfs_read(struct file **file_ptr, char __user **buf_ptr, size_t *count_ptr, loff_t **pos);\n#endif\nssize_t vfs_read(struct file *file, char __user *buf, size_t count, loff_t *pos)\n{\n#ifdef CONFIG_KSU\n\tksu_handle_vfs_read(\&file, \&buf, \&count, \&pos);\n#endif|' fs/read_write.c
+
+          echo "=== Patching fs/stat.c ==="
+          sed -i 's|^int vfs_statx(int dfd, const char __user \*filename, int flags,|#ifdef CONFIG_KSU\n\textern int ksu_handle_stat(int *dfd, const char __user **filename_user, int *flags);\n#endif\nint vfs_statx(int dfd, const char __user *filename, int flags,|' fs/stat.c
+
+          echo "=== VFS hook patching complete ==="
+          grep -n "ksu_handle" fs/exec.c fs/open.c fs/read_write.c fs/stat.c || echo "WARNING: Some patches may not have applied"
 
       - name: 🧪 Inject NetHunter & KSU Manual Hook Defconfigs
         run: |
@@ -93,7 +145,6 @@ jobs:
             echo "[+] Found defconfig at: $DEFCONFIG"
 
             # KernelSU-Next — enable the driver
-            # Note: hook mode is patched into .config later (more reliable)
             echo "CONFIG_KSU=y" >> $DEFCONFIG
 
             # Zygisk Next prerequisites
@@ -141,7 +192,7 @@ jobs:
             echo "CONFIG_DVB_USB_V2=y" >> $DEFCONFIG
             echo "CONFIG_DVB_USB_RTL28XXU=y" >> $DEFCONFIG
 
-            # IPC & Namespaces (chroot, Metasploit, Docker)
+            # IPC & Namespaces
             echo "CONFIG_SYSVIPC=y" >> $DEFCONFIG
             echo "CONFIG_SYSVIPC_SYSCTL=y" >> $DEFCONFIG
             echo "CONFIG_USER_NS=y" >> $DEFCONFIG
@@ -158,7 +209,7 @@ jobs:
           fi
 
       # ============================================================
-      # Build Kernel — with reliable KSU hook mode patching
+      # Build Kernel
       # ============================================================
       - name: ⚙️ Build Kernel
         run: |
@@ -174,11 +225,9 @@ jobs:
                 CROSS_COMPILE_ARM32=$GITHUB_WORKSPACE/arm-linux-androideabi-4.9/bin/arm-linux-androideabi-"
           cd kernel-source
 
-          # 1. Generate .config from defconfig
           echo "=== Generating .config from defconfig ==="
           make ${args} ${{ github.event.inputs.defconfig }}
 
-          # 2. Locate the generated .config
           if [ -f ../out/.config ]; then
             CONFIG_FILE="../out/.config"
           elif [ -f out/.config ]; then
@@ -188,35 +237,19 @@ jobs:
           fi
           echo "[+] Using CONFIG_FILE=$CONFIG_FILE"
 
-          # 3. Force Manual Hook mode + disable Kprobes in .config
-          echo "=== Patching KSU hook mode in .config ==="
-          sed -i 's/^CONFIG_KSU_WITH_KPROBES=y/# CONFIG_KSU_WITH_KPROBES is not set/' "$CONFIG_FILE"
-          sed -i 's/^CONFIG_KSU_MANUAL_HOOK=y/# CONFIG_KSU_MANUAL_HOOK is not set/' "$CONFIG_FILE"
-          sed -i 's/^# CONFIG_KSU_MANUAL_HOOK is not set/CONFIG_KSU_MANUAL_HOOK=y/' "$CONFIG_FILE"
-          sed -i 's/^CONFIG_KSU_MANUAL_HOOK=/# CONFIG_KSU_MANUAL_HOOK=/' "$CONFIG_FILE"
-          sed -i 's/^# CONFIG_KSU_MANUAL_HOOK=/# CONFIG_KSU_MANUAL_HOOK=/' "$CONFIG_FILE"
-          echo "CONFIG_KSU_MANUAL_HOOK=y" >> "$CONFIG_FILE"
-          echo "# CONFIG_KSU_WITH_KPROBES is not set" >> "$CONFIG_FILE"
+          echo "=== KSU symbols BEFORE olddefconfig ==="
+          grep -E "KSU|KSU_MANUAL|KSU_WITH_KPROBES" "$CONFIG_FILE" || echo "(none found)"
 
-          echo "=== KSU settings in .config BEFORE olddefconfig ==="
-          grep -E "KSU_MANUAL|KSU_WITH_KPROBES|^CONFIG_KSU=" "$CONFIG_FILE" || echo "(none found)"
-
-          # 4. Let Kbuild resolve dependencies
           echo "=== Running olddefconfig ==="
           make ${args} olddefconfig
 
-          echo "=== KSU settings in .config AFTER olddefconfig ==="
+          echo "=== KSU symbols AFTER olddefconfig ==="
           grep -E "KSU_MANUAL|KSU_WITH_KPROBES|^CONFIG_KSU=" "$CONFIG_FILE" || echo "(none found)"
 
-          # 5. Final sanity check
           if ! grep -q "^CONFIG_KSU_MANUAL_HOOK=y" "$CONFIG_FILE"; then
-            echo "⚠️ WARNING: CONFIG_KSU_MANUAL_HOOK=y not present — KSU may fall back to Kprobes"
-          fi
-          if grep -q "^CONFIG_KSU_WITH_KPROBES=y" "$CONFIG_FILE"; then
-            echo "⚠️ WARNING: CONFIG_KSU_WITH_KPROBES=y is still enabled — this will override Manual mode!"
+            echo "⚠️ WARNING: CONFIG_KSU_MANUAL_HOOK=y not present"
           fi
 
-          # 6. Build
           echo "=== Building kernel ==="
           make -j$(nproc) ${args}
 
@@ -226,15 +259,10 @@ jobs:
           git clone --depth=1 -b "${{ github.event.inputs.anykernel_branch }}" "${{ github.event.inputs.anykernel_repo }}" AnyKernel3
           rm -rf AnyKernel3/.git* AnyKernel3/LICENSE AnyKernel3/README.md
 
-          # ============================================================
-          # Write Miatoll-specific anykernel.sh (base64-encoded)
-          # Correct block=boot; spelling (no typo)
-          # ============================================================
           base64 -d > AnyKernel3/anykernel.sh << 'AK3EOF'
           IyMjIEFueUtlcm5lbDMgUmFtZGlzayBNb2QgU2NyaXB0CiMjIE1pYXRvbGwgTmV0SHVudGVyIEtlcm5lbCAtIEtlcm5lbFNVLU5leHQKCiMjIyBBbnlLZXJuZWwgc2V0dXAKcHJvcGVydGllcygpIHsgJwprZXJuZWwuc3RyaW5nPU1pYXRvbGwgTmV0SHVudGVyIEtlcm5lbCAoS1NVLU5leHQgdjMuNC4wKQpkby5kZXZpY2VjaGVjaz0xCmRvLm1vZHVsZXM9MApkby5zeXN0ZW1sZXNzPTAKZG8uY2xlYW51cD0xCmRvLmNsZWFudXBvbmFib3J0PTAKZGV2aWNlLm5hbWUxPWN1cnRhbmEKZGV2aWNlLm5hbWUyPWpveWV1c2UKZGV2aWNlLm5hbWUzPWV4Y2FsaWJ1cgpkZXZpY2UubmFtZTQ9Z3JhbQpkZXZpY2UubmFtZTU9bWlhdG9sbApzdXBwb3J0ZWQudmVyc2lvbnM9CnN1cHBvcnRlZC5wYXRjaGxldmVscz0Kc3VwcG9ydGVkLnZlbmRvcnBhdGNobGV2ZWxzPQonOyB9ICMgZW5kIHByb3BlcnRpZXMKCiMjIyBBbnlLZXJuZWwgaW5zdGFsbApCTE9DSz1ib290OwpJU19TTE9UX0RFVklDRT0wOwppc19zbG90X2RldmljZT0wOwpSQU1ESVNLX0NPTVBSRVNTSU9OPWF1dG87CnJhbWRpc2tfY29tcHJlc3Npb249YXV0bzsKUEFUQ0hfVkJNRVRBX0ZMQUc9MDsKcGF0Y2hfdmJtZXRhX2ZsYWc9MDsKTk9fVkJNRVRBX1BBUlRJVElPTl9QQVRDSD0xOwpub192Ym1ldGFfcGFydGl0aW9uX3BhdGNoPTE7CgouIHRvb2xzL2FrMy1jb3JlLnNoOwoKc3BsaXRfYm9vdDsKCnJtIC1mICRTUExJVElNRy9hdmIqICRTUExJVElNRy8qLmF2YiAyPi9kZXYvbnVsbDsKCmZsYXNoX2Jvb3Q7CiMjIGVuZCBib290IGluc3RhbGwKCm1vdW50IC9kYXRhIDI+L2Rldi9udWxsOwppZiBbIC1kIC9kYXRhIF07IHRoZW4KICBta2RpciAtcCAvZGF0YS9hZGIgL2RhdGEvYWRiL21vZHVsZXMgL2RhdGEvYWRiL2tzdSAvZGF0YS9hZGIva3N1L2JpbiAvZGF0YS9hZGIvcG9zdC1mcy1kYXRhLmQgL2RhdGEvYWRiL3NlcnZpY2UuZCAyPi9kZXYvbnVsbDsKICBjaG1vZCA3NTUgL2RhdGEvYWRiIC9kYXRhL2FkYi9tb2R1bGVzIC9kYXRhL2FkYi9rc3UgL2RhdGEvYWRiL2tzdS9iaW4gMj4vZGV2L251bGw7CiAgY2htb2QgNzAwIC9kYXRhL2FkYi9wb3N0LWZzLWRhdGEuZCAvZGF0YS9hZGIvc2VydmljZS5kIDI+L2Rldi9udWxsOwoKICBpZiBbIC1mICRBS0hPTUUvdG9vbHMva3N1ZCBdOyB0aGVuCiAgICBjcCAtZiAkQUtIT01FL3Rvb2xzL2tzdWQgL2RhdGEvYWRiL2tzdWQgMj4vZGV2L251bGw7CiAgICBjaG1vZCA3NTUgL2RhdGEvYWRiL2tzdWQgMj4vZGV2L251bGw7CiAgICBjcCAtZiAkQUtIT01FL3Rvb2xzL2tzdWQgL2RhdGEvYWRiL2tzdS9iaW4va3N1ZCAyPi9kZXYvbnVsbDsKICAgIGNobW9kIDc1NSAvZGF0YS9hZGIva3N1L2Jpbi9rc3VkIDI+L2Rldi9udWxsOwogIGZpOwpmaTs=
           AK3EOF
 
-          # ---- Locate the correct kernel output directory ----
           if [ -d "kernel-source/out/arch/arm64/boot" ]; then
             IMG_PATH="kernel-source/out/arch/arm64/boot"
           elif [ -d "out/arch/arm64/boot" ]; then
@@ -246,7 +274,6 @@ jobs:
           fi
           echo "[+] Using IMG_PATH=$IMG_PATH"
 
-          # ---- Copy kernel image ----
           for img in Image.gz-dtb Image-dtb Image.gz Image; do
             if [[ -f $IMG_PATH/$img ]]; then
               cp $IMG_PATH/$img AnyKernel3/$img
@@ -259,24 +286,17 @@ jobs:
             echo "[+] Copied dtbo.img"
           fi
 
-          # ---- Bundle ksud v3.4.0 ----
           mkdir -p AnyKernel3/tools
           curl -LSs "https://github.com/KernelSU-Next/KernelSU-Next/releases/download/v3.4.0/ksud-aarch64-linux-android" \
             -o AnyKernel3/tools/ksud
           chmod 755 AnyKernel3/tools/ksud
 
-          # ---- Verify anykernel.sh ----
-          echo "=== anykernel.sh content ==="
-          cat AnyKernel3/anykernel.sh | head -30
-
-          # ---- Zip ----
           DATE=$(date +'%Y-%m-%d_%H-%M')
           ZIP_NAME="${{ github.event.inputs.zip_name }}-${{ github.event.inputs.developer }}-${DATE}.zip"
           cd AnyKernel3
           zip -r9 "../${ZIP_NAME}" .
           cd ..
           echo "[+] Created ${ZIP_NAME}"
-          unzip -l "${ZIP_NAME}" | head -25
 
       - name: ☁️ Upload Artifact
         uses: actions/upload-artifact@v4
