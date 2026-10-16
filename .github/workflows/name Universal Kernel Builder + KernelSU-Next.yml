@@ -52,11 +52,11 @@ jobs:
     steps:
       - name: 🧰 Setup Toolchain
         run: |
-          # GCC 4.9 Cross Compilers
+          # GCC 4.9 cross compilers
           git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9 aarch64-linux-android-4.9
           git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9 arm-linux-androideabi-4.9
-          
-          # Clang 19 (r530567) for Android 16 compatibility
+
+          # Clang 19 (r530567) - Android 16 compatible
           mkdir clang
           curl -s "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-r530567.tar.gz" -RLO
           tar -C clang/ -xf clang-*.tar.gz
@@ -66,8 +66,7 @@ jobs:
           git clone --depth=1 ${{ github.event.inputs.kernel_source }} -b ${{ github.event.inputs.kernel_branch }} kernel-source
 
       # ============================================================
-      # FIXED: use official KernelSU-Next setup.sh (next branch)
-      # The legacy "init_kernelsu.sh" does NOT exist in KernelSU-Next
+      # FIXED: official KernelSU-Next setup.sh (next branch)
       # ============================================================
       - name: 🧙 Inject KernelSU-Next
         if: ${{ github.event.inputs.enable_kernelsu_next }}
@@ -79,45 +78,78 @@ jobs:
 
       - name: 🧪 Inject NetHunter & KSU Manual Hook Defconfigs
         run: |
-          # Locate the defconfig file inside the kernel source
           DEFCONFIG="kernel-source/arch/arm64/configs/${{ github.event.inputs.defconfig }}"
-          
-          # Fallback if the defconfig is in a different subfolder
+
           if [ ! -f "$DEFCONFIG" ]; then
-            echo "Primary path failed, searching for ${{ github.event.inputs.defconfig }}..."
+            echo "[!] Primary path failed, searching for defconfig..."
             DEFCONFIG=$(find kernel-source -name "$(basename ${{ github.event.inputs.defconfig }})" | head -n 1)
           fi
+
           if [ -f "$DEFCONFIG" ]; then
-            echo "Appending configs to $DEFCONFIG"
-            
-            # 1. KernelSU-Next Manual Hook (Required for Zygisk Next on non-GKI)
+            echo "[+] Found defconfig at: $DEFCONFIG"
+
+            # KernelSU-Next Manual Hook (required for Zygisk Next on non-GKI)
             echo "CONFIG_KSU=y" >> $DEFCONFIG
             echo "CONFIG_KSU_MANUAL_HOOK=y" >> $DEFCONFIG
             echo "# CONFIG_KSU_WITH_KPROBES is not set" >> $DEFCONFIG
             echo "# CONFIG_KSU_SUSFS_SUS_SU is not set" >> $DEFCONFIG
-            
-            # 2. Zygisk Next Prerequisites
+
+            # Zygisk Next prerequisites
             echo "CONFIG_OVERLAY_FS=y" >> $DEFCONFIG
             echo "CONFIG_TMPFS_XATTR=y" >> $DEFCONFIG
             echo "CONFIG_SECURITY_SELINUX_DEVELOP=y" >> $DEFCONFIG
-            
-            # 3. NetHunter Core Drivers (Wi-Fi, HID, Bluetooth, SDR)
+
+            # NetHunter Wi-Fi drivers
             echo "CONFIG_CFG80211=y" >> $DEFCONFIG
             echo "CONFIG_MAC80211=y" >> $DEFCONFIG
+            echo "CONFIG_MAC80211_MESH=y" >> $DEFCONFIG
+            echo "CONFIG_CFG80211_WEXT=y" >> $DEFCONFIG
+            echo "CONFIG_WLAN_VENDOR_ATH=y" >> $DEFCONFIG
+            echo "CONFIG_WLAN_VENDOR_REALTEK=y" >> $DEFCONFIG
+            echo "CONFIG_WLAN_VENDOR_RALINK=y" >> $DEFCONFIG
             echo "CONFIG_ATH9K_HTC=m" >> $DEFCONFIG
             echo "CONFIG_RTL8188EU=m" >> $DEFCONFIG
             echo "CONFIG_RTL8812AU=m" >> $DEFCONFIG
+            echo "CONFIG_RTL88x2BU=m" >> $DEFCONFIG
+            echo "CONFIG_RT2800USB=m" >> $DEFCONFIG
+            echo "CONFIG_RT2X00=m" >> $DEFCONFIG
+
+            # NetHunter USB Ethernet
+            echo "CONFIG_USB_NET_DRIVERS=y" >> $DEFCONFIG
+            echo "CONFIG_USB_USBNET=y" >> $DEFCONFIG
+            echo "CONFIG_USB_NET_AX88179_178A=y" >> $DEFCONFIG
+            echo "CONFIG_USB_NET_RTL8152=y" >> $DEFCONFIG
+            echo "CONFIG_USB_NET_CDCETHER=y" >> $DEFCONFIG
+            echo "CONFIG_USB_NET_CDC_NCM=y" >> $DEFCONFIG
+
+            # NetHunter BadUSB / HID
             echo "CONFIG_USB_CONFIGFS_F_HID=y" >> $DEFCONFIG
             echo "CONFIG_USB_F_HID=y" >> $DEFCONFIG
+            echo "CONFIG_USB_CONFIGFS_MASS_STORAGE=y" >> $DEFCONFIG
+
+            # NetHunter Bluetooth
             echo "CONFIG_BT_HCIBTUSB=y" >> $DEFCONFIG
+            echo "CONFIG_BT_HCIBTUSB_BCM=y" >> $DEFCONFIG
+            echo "CONFIG_BT_HCIBTUSB_RTL=y" >> $DEFCONFIG
+
+            # NetHunter SDR / DVB
+            echo "CONFIG_MEDIA_SUPPORT=y" >> $DEFCONFIG
+            echo "CONFIG_MEDIA_USB_SUPPORT=y" >> $DEFCONFIG
+            echo "CONFIG_MEDIA_DIGITAL_TV_SUPPORT=y" >> $DEFCONFIG
+            echo "CONFIG_DVB_USB_V2=y" >> $DEFCONFIG
             echo "CONFIG_DVB_USB_RTL28XXU=y" >> $DEFCONFIG
-            
-            # 4. IPC & Namespaces (chroot, Metasploit, Docker)
+
+            # IPC & Namespaces (chroot, Metasploit, Docker)
             echo "CONFIG_SYSVIPC=y" >> $DEFCONFIG
+            echo "CONFIG_SYSVIPC_SYSCTL=y" >> $DEFCONFIG
             echo "CONFIG_USER_NS=y" >> $DEFCONFIG
+            echo "CONFIG_PID_NS=y" >> $DEFCONFIG
+            echo "CONFIG_UTS_NS=y" >> $DEFCONFIG
+            echo "CONFIG_IPC_NS=y" >> $DEFCONFIG
+            echo "CONFIG_NET_NS=y" >> $DEFCONFIG
             echo "CONFIG_BLK_DEV_LOOP=y" >> $DEFCONFIG
-            
-            echo "Configs appended successfully."
+
+            echo "[+] All NetHunter + KSU configs appended."
           else
             echo "❌ ERROR: Could not locate defconfig: ${{ github.event.inputs.defconfig }}"
             exit 1
@@ -144,24 +176,49 @@ jobs:
         run: |
           git clone --depth=1 -b "${{ github.event.inputs.anykernel_branch }}" "${{ github.event.inputs.anykernel_repo }}" AnyKernel3
           rm -rf AnyKernel3/.git* AnyKernel3/LICENSE AnyKernel3/README.md
+
+          # ============================================================
+          # Overwrite stock anykernel.sh with Miatoll-specific version
+          # Written via base64 to avoid YAML heredoc indentation issues
+          # ============================================================
+          base64 -d > AnyKernel3/anykernel.sh << 'AK3EOF'
+          IyMjIEFueUtlcm5lbDQgUmFtZGlzayBNb2QgU2NyaXB0CiMjIE1pYXRvbGwgTmV0SHVudGVyIEtlcm5lbCAtIEtlcm5lbFNVLU5leHQKCiMjIyBBbnlLZXJuZWwgc2V0dXAKcHJvcGVydGllcygpIHsgJwprZXJuZWwuc3RyaW5nPU1pYXRvbGwgTmV0SHVudGVyIEtlcm5lbCAoS1NVLU5leHQgdjMuNC4wKQpkby5kZXZpY2VjaGVjaz0xCmRvLm1vZHVsZXM9MApkby5zeXN0ZW1sZXNzPTAKZG8uY2xlYW51cD0xCmRvLmNsZWFudXBvbmFib3J0PTAKZGV2aWNlLm5hbWUxPWN1cnRhbmEKZGV2aWNlLm5hbWUyPWpveWV1c2UKZGV2aWNlLm5hbWUzPWV4Y2FsaWJ1cgpkZXZpY2UubmFtZTQ9Z3JhbQpkZXZpY2UubmFtZTU9bWlhdG9sbApzdXBwb3J0ZWQudmVyc2lvbnM9CnN1cHBvcnRlZC5wYXRjaGxldmVscz0Kc3VwcG9ydGVkLnZlbmRvcnBhdGNobGV2ZWxzPQonOyB9ICMgZW5kIHByb3BlcnRpZXMKCiMjIyBBbnlLZXJuZWwgaW5zdGFsbApCTE9DSz1ib290Owpub2NrPWJvb3Q7CklTX1NMT1RfREVWSUNFPTA7CmlzX3Nsb3RfZGV2aWNlPTA7ClJBTURJU0tfQ09NUFJFU1NJT049YXV0bzsKcmFtZGlza19jb21wcmVzc2lvbj1hdXRvOwpQQVRDSF9WQk1FVEFfRkxBRz0wOwpwYXRjaF92Ym1ldGFfZmxhZz0wOwpOT19WQk1FVEFfUEFSVElUSU9OX1BBVENIPTE7Cm5vX3ZibWV0YV9wYXJ0aXRpb25fcGF0Y2g9MTsKCiMgaW1wb3J0IGZ1bmN0aW9ucy92YXJpYWJsZXMgYW5kIHNldHVwIHBhdGNoaW5nIChETyBOT1QgUkVNT1ZFKQouIHRvb2xzL2FrMy1jb3JlLnNoOwoKIyBVc2Ugc3BsaXRfYm9vdCB0byBwcmVzZXJ2ZSBvcmlnaW5hbCBjckRyb2lkIDE2LjAgcmFtZGlzayBiaXQtZm9yLWJpdApzcGxpdF9ib290OwoKIyBTdHJpcCBhbnkgQVZCIHByZXNlcnZlIG1ldGFkYXRhIGJlZm9yZSByZXBhY2tpbmcKcm0gLWYgJFNQTElUSU1HL2F2YiogJFNQTElUSU1HLyouYXZiIDI+L2Rldi9udWxsOwoKZmxhc2hfYm9vdDsKIyMgZW5kIGJvb3QgaW5zdGFsbAoKIyBFbnN1cmUgL2RhdGEvYWRiIGV4aXN0cyBmb3IgS2VybmVsU1UtTmV4dCBkYWVtb24sIG1vZHVsZXMsIFp5Z2lzayBOZXh0Cm1vdW50IC9kYXRhIDI+L2Rldi9udWxsOwppZiBbIC1kIC9kYXRhIF07IHRoZW4KICBta2RpciAtcCAvZGF0YS9hZGIgL2RhdGEvYWRiL21vZHVsZXMgL2RhdGEvYWRiL2tzdSAvZGF0YS9hZGIva3N1L2JpbiAvZGF0YS9hZGIvcG9zdC1mcy1kYXRhLmQgL2RhdGEvYWRiL3NlcnZpY2UuZCAyPi9kZXYvbnVsbDsKICBjaG1vZCA3NTUgL2RhdGEvYWRiIC9kYXRhL2FkYi9tb2R1bGVzIC9kYXRhL2FkYi9rc3UgL2RhdGEvYWRiL2tzdS9iaW4gMj4vZGV2L251bGw7CiAgY2htb2QgNzAwIC9kYXRhL2FkYi9wb3N0LWZzLWRhdGEuZCAvZGF0YS9hZGIvc2VydmljZS5kIDI+L2Rldi9udWxsOwoKICBpZiBbIC1mICRBS0hPTUUvdG9vbHMva3N1ZCBdOyB0aGVuCiAgICBjcCAtZiAkQUtIT01FL3Rvb2xzL2tzdWQgL2RhdGEvYWRiL2tzdWQgMj4vZGV2L251bGw7CiAgICBjaG1vZCA3NTUgL2RhdGEvYWRiL2tzdWQgMj4vZGV2L251bGw7CiAgICBjcCAtZiAkQUtIT01FL3Rvb2xzL2tzdWQgL2RhdGEvYWRiL2tzdS9iaW4va3N1ZCAyPi9kZXYvbnVsbDsKICAgIGNobW9kIDc1NSAvZGF0YS9hZGIva3N1L2Jpbi9rc3VkIDI+L2Rldi9udWxsOwogIGZpOwpmazs=
+          AK3EOF
+
+          # ---- Copy kernel image ----
           IMG_PATH="out/arch/arm64/boot"
           for img in Image.gz-dtb Image-dtb Image.gz Image; do
             if [[ -f $IMG_PATH/$img ]]; then
               cp $IMG_PATH/$img AnyKernel3/$img
+              echo "[+] Copied $img"
               break
             fi
           done
           if [[ -f $IMG_PATH/dtbo.img ]]; then
             cp $IMG_PATH/dtbo.img AnyKernel3/dtbo.img
+            echo "[+] Copied dtbo.img"
           fi
-          # Download ksud v3.4.0 (matches KernelSU-Next Manager)
+
+          # ---- Bundle ksud v3.4.0 ----
           mkdir -p AnyKernel3/tools
-          curl -LSs "https://github.com/KernelSU-Next/KernelSU-Next/releases/download/v3.4.0/ksud-aarch64-linux-android" -o AnyKernel3/tools/ksud
+          curl -LSs "https://github.com/KernelSU-Next/KernelSU-Next/releases/download/v3.4.0/ksud-aarch64-linux-android" \
+            -o AnyKernel3/tools/ksud
           chmod 755 AnyKernel3/tools/ksud
+
+          # ---- Verify anykernel.sh ----
+          echo "=== anykernel.sh content ==="
+          cat AnyKernel3/anykernel.sh
+
+          # ---- Zip correctly ----
           DATE=$(date +'%Y-%m-%d_%H-%M')
           ZIP_NAME="${{ github.event.inputs.zip_name }}-${{ github.event.inputs.developer }}-${DATE}.zip"
           cd AnyKernel3
-          zip -r "${ZIP_NAME}" *
+          zip -r9 "../${ZIP_NAME}" .
+          cd ..
+
+          echo "[+] Created ${ZIP_NAME}"
+          echo "=== ZIP contents (top-level) ==="
+          unzip -l "${ZIP_NAME}" | head -25
 
       - name: ☁️ Upload Artifact
         uses: actions/upload-artifact@v4
