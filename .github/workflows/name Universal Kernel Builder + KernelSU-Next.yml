@@ -75,6 +75,10 @@ jobs:
           curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -s next
           echo "=== KernelSU-Next tree after setup ==="
           ls -la KernelSU-Next/ 2>/dev/null || ls -la KernelSU/ 2>/dev/null || true
+          echo "=== KernelSU-Next Makefile ==="
+          cat KernelSU-Next/kernel/Makefile 2>/dev/null | head -30 || true
+          echo "=== KernelSU-Next Kconfig ==="
+          cat KernelSU-Next/kernel/Kconfig 2>/dev/null | head -40 || true
 
       - name: 🧪 Inject NetHunter & KSU Manual Hook Defconfigs
         run: |
@@ -88,11 +92,9 @@ jobs:
           if [ -f "$DEFCONFIG" ]; then
             echo "[+] Found defconfig at: $DEFCONFIG"
 
-            # KernelSU-Next Manual Hook (required for Zygisk Next on non-GKI)
+            # KernelSU-Next — enable the driver
+            # Note: hook mode is patched into .config later (more reliable)
             echo "CONFIG_KSU=y" >> $DEFCONFIG
-            echo "CONFIG_KSU_MANUAL_HOOK=y" >> $DEFCONFIG
-            echo "# CONFIG_KSU_WITH_KPROBES is not set" >> $DEFCONFIG
-            echo "# CONFIG_KSU_SUSFS_SUS_SU is not set" >> $DEFCONFIG
 
             # Zygisk Next prerequisites
             echo "CONFIG_OVERLAY_FS=y" >> $DEFCONFIG
@@ -155,6 +157,9 @@ jobs:
             exit 1
           fi
 
+      # ============================================================
+      # Build Kernel — with reliable KSU hook mode patching
+      # ============================================================
       - name: ⚙️ Build Kernel
         run: |
           export KBUILD_BUILD_USER="${{ github.event.inputs.developer }}"
@@ -168,7 +173,51 @@ jobs:
                 CROSS_COMPILE=$GITHUB_WORKSPACE/aarch64-linux-android-4.9/bin/aarch64-linux-android- \
                 CROSS_COMPILE_ARM32=$GITHUB_WORKSPACE/arm-linux-androideabi-4.9/bin/arm-linux-androideabi-"
           cd kernel-source
+
+          # 1. Generate .config from defconfig
+          echo "=== Generating .config from defconfig ==="
           make ${args} ${{ github.event.inputs.defconfig }}
+
+          # 2. Locate the generated .config
+          if [ -f ../out/.config ]; then
+            CONFIG_FILE="../out/.config"
+          elif [ -f out/.config ]; then
+            CONFIG_FILE="out/.config"
+          else
+            CONFIG_FILE=$(find .. -name ".config" -not -path "*/scripts/*" | head -1)
+          fi
+          echo "[+] Using CONFIG_FILE=$CONFIG_FILE"
+
+          # 3. Force Manual Hook mode + disable Kprobes in .config
+          echo "=== Patching KSU hook mode in .config ==="
+          sed -i 's/^CONFIG_KSU_WITH_KPROBES=y/# CONFIG_KSU_WITH_KPROBES is not set/' "$CONFIG_FILE"
+          sed -i 's/^CONFIG_KSU_MANUAL_HOOK=y/# CONFIG_KSU_MANUAL_HOOK is not set/' "$CONFIG_FILE"
+          sed -i 's/^# CONFIG_KSU_MANUAL_HOOK is not set/CONFIG_KSU_MANUAL_HOOK=y/' "$CONFIG_FILE"
+          sed -i 's/^CONFIG_KSU_MANUAL_HOOK=/# CONFIG_KSU_MANUAL_HOOK=/' "$CONFIG_FILE"
+          sed -i 's/^# CONFIG_KSU_MANUAL_HOOK=/# CONFIG_KSU_MANUAL_HOOK=/' "$CONFIG_FILE"
+          echo "CONFIG_KSU_MANUAL_HOOK=y" >> "$CONFIG_FILE"
+          echo "# CONFIG_KSU_WITH_KPROBES is not set" >> "$CONFIG_FILE"
+
+          echo "=== KSU settings in .config BEFORE olddefconfig ==="
+          grep -E "KSU_MANUAL|KSU_WITH_KPROBES|^CONFIG_KSU=" "$CONFIG_FILE" || echo "(none found)"
+
+          # 4. Let Kbuild resolve dependencies
+          echo "=== Running olddefconfig ==="
+          make ${args} olddefconfig
+
+          echo "=== KSU settings in .config AFTER olddefconfig ==="
+          grep -E "KSU_MANUAL|KSU_WITH_KPROBES|^CONFIG_KSU=" "$CONFIG_FILE" || echo "(none found)"
+
+          # 5. Final sanity check
+          if ! grep -q "^CONFIG_KSU_MANUAL_HOOK=y" "$CONFIG_FILE"; then
+            echo "⚠️ WARNING: CONFIG_KSU_MANUAL_HOOK=y not present — KSU may fall back to Kprobes"
+          fi
+          if grep -q "^CONFIG_KSU_WITH_KPROBES=y" "$CONFIG_FILE"; then
+            echo "⚠️ WARNING: CONFIG_KSU_WITH_KPROBES=y is still enabled — this will override Manual mode!"
+          fi
+
+          # 6. Build
+          echo "=== Building kernel ==="
           make -j$(nproc) ${args}
 
       - name: 📦 Package with AnyKernel3
@@ -179,7 +228,7 @@ jobs:
 
           # ============================================================
           # Write Miatoll-specific anykernel.sh (base64-encoded)
-          # Regenerated with correct block=boot; (no typo)
+          # Correct block=boot; spelling (no typo)
           # ============================================================
           base64 -d > AnyKernel3/anykernel.sh << 'AK3EOF'
           IyMjIEFueUtlcm5lbDMgUmFtZGlzayBNb2QgU2NyaXB0CiMjIE1pYXRvbGwgTmV0SHVudGVyIEtlcm5lbCAtIEtlcm5lbFNVLU5leHQKCiMjIyBBbnlLZXJuZWwgc2V0dXAKcHJvcGVydGllcygpIHsgJwprZXJuZWwuc3RyaW5nPU1pYXRvbGwgTmV0SHVudGVyIEtlcm5lbCAoS1NVLU5leHQgdjMuNC4wKQpkby5kZXZpY2VjaGVjaz0xCmRvLm1vZHVsZXM9MApkby5zeXN0ZW1sZXNzPTAKZG8uY2xlYW51cD0xCmRvLmNsZWFudXBvbmFib3J0PTAKZGV2aWNlLm5hbWUxPWN1cnRhbmEKZGV2aWNlLm5hbWUyPWpveWV1c2UKZGV2aWNlLm5hbWUzPWV4Y2FsaWJ1cgpkZXZpY2UubmFtZTQ9Z3JhbQpkZXZpY2UubmFtZTU9bWlhdG9sbApzdXBwb3J0ZWQudmVyc2lvbnM9CnN1cHBvcnRlZC5wYXRjaGxldmVscz0Kc3VwcG9ydGVkLnZlbmRvcnBhdGNobGV2ZWxzPQonOyB9ICMgZW5kIHByb3BlcnRpZXMKCiMjIyBBbnlLZXJuZWwgaW5zdGFsbApCTE9DSz1ib290OwpJU19TTE9UX0RFVklDRT0wOwppc19zbG90X2RldmljZT0wOwpSQU1ESVNLX0NPTVBSRVNTSU9OPWF1dG87CnJhbWRpc2tfY29tcHJlc3Npb249YXV0bzsKUEFUQ0hfVkJNRVRBX0ZMQUc9MDsKcGF0Y2hfdmJtZXRhX2ZsYWc9MDsKTk9fVkJNRVRBX1BBUlRJVElPTl9QQVRDSD0xOwpub192Ym1ldGFfcGFydGl0aW9uX3BhdGNoPTE7CgouIHRvb2xzL2FrMy1jb3JlLnNoOwoKc3BsaXRfYm9vdDsKCnJtIC1mICRTUExJVElNRy9hdmIqICRTUExJVElNRy8qLmF2YiAyPi9kZXYvbnVsbDsKCmZsYXNoX2Jvb3Q7CiMjIGVuZCBib290IGluc3RhbGwKCm1vdW50IC9kYXRhIDI+L2Rldi9udWxsOwppZiBbIC1kIC9kYXRhIF07IHRoZW4KICBta2RpciAtcCAvZGF0YS9hZGIgL2RhdGEvYWRiL21vZHVsZXMgL2RhdGEvYWRiL2tzdSAvZGF0YS9hZGIva3N1L2JpbiAvZGF0YS9hZGIvcG9zdC1mcy1kYXRhLmQgL2RhdGEvYWRiL3NlcnZpY2UuZCAyPi9kZXYvbnVsbDsKICBjaG1vZCA3NTUgL2RhdGEvYWRiIC9kYXRhL2FkYi9tb2R1bGVzIC9kYXRhL2FkYi9rc3UgL2RhdGEvYWRiL2tzdS9iaW4gMj4vZGV2L251bGw7CiAgY2htb2QgNzAwIC9kYXRhL2FkYi9wb3N0LWZzLWRhdGEuZCAvZGF0YS9hZGIvc2VydmljZS5kIDI+L2Rldi9udWxsOwoKICBpZiBbIC1mICRBS0hPTUUvdG9vbHMva3N1ZCBdOyB0aGVuCiAgICBjcCAtZiAkQUtIT01FL3Rvb2xzL2tzdWQgL2RhdGEvYWRiL2tzdWQgMj4vZGV2L251bGw7CiAgICBjaG1vZCA3NTUgL2RhdGEvYWRiL2tzdWQgMj4vZGV2L251bGw7CiAgICBjcCAtZiAkQUtIT01FL3Rvb2xzL2tzdWQgL2RhdGEvYWRiL2tzdS9iaW4va3N1ZCAyPi9kZXYvbnVsbDsKICAgIGNobW9kIDc1NSAvZGF0YS9hZGIva3N1L2Jpbi9rc3VkIDI+L2Rldi9udWxsOwogIGZpOwpmaTs=
