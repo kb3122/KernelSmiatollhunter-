@@ -1,5 +1,4 @@
-
-name: Build Miatoll NetHunter Kernel (APatch Ready)
+name: Build APatch Kernel
 
 on:
   workflow_dispatch:
@@ -11,217 +10,87 @@ jobs:
       TZ: Asia/Jakarta
 
     steps:
-      - name: 🧰 Setup Toolchain
+      - name: Setup Toolchain
         run: |
-          # GCC 4.9 cross compilers
           git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-android-4.9 aarch64-linux-android-4.9
           git clone --depth=1 https://github.com/LineageOS/android_prebuilts_gcc_linux-x86_arm_arm-linux-androideabi-4.9 arm-linux-androideabi-4.9
-
-          # Clang 19 (r530567) - Android 16 compatible
           mkdir clang
           curl -s "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-r530567.tar.gz" -RLO
           tar -C clang/ -xf clang-*.tar.gz
 
-      - name: ⏱️ Pull Kernel Source
+      - name: Pull Kernel Source
         run: |
           git clone --depth=1 https://github.com/crdroidandroid/android_kernel_xiaomi_sm6250 -b 16.0 kernel-source
 
-      - name: 🧪 Inject NetHunter Defconfigs (APatch Ready)
+      - name: Inject Defconfigs
         run: |
           DEFCONFIG="kernel-source/arch/arm64/configs/vendor/xiaomi/miatoll_defconfig"
-
           if [ ! -f "$DEFCONFIG" ]; then
-            echo "[!] Primary path failed, searching for defconfig..."
             DEFCONFIG=$(find kernel-source -name "miatoll_defconfig" | head -n 1)
           fi
+          
+          # APatch Core Requirements
+          echo "CONFIG_KALLSYMS=y" >> $DEFCONFIG
+          echo "CONFIG_KALLSYMS_ALL=y" >> $DEFCONFIG
+          
+          # Zygisk Prerequisites
+          echo "CONFIG_OVERLAY_FS=y" >> $DEFCONFIG
+          echo "CONFIG_TMPFS_XATTR=y" >> $DEFCONFIG
+          echo "CONFIG_SECURITY_SELINUX_DEVELOP=y" >> $DEFCONFIG
+          
+          # NetHunter Wi-Fi
+          echo "CONFIG_CFG80211=y" >> $DEFCONFIG
+          echo "CONFIG_MAC80211=y" >> $DEFCONFIG
+          echo "CONFIG_MAC80211_MESH=y" >> $DEFCONFIG
+          echo "CONFIG_CFG80211_WEXT=y" >> $DEFCONFIG
+          echo "CONFIG_ATH9K_HTC=m" >> $DEFCONFIG
+          echo "CONFIG_RTL8188EU=m" >> $DEFCONFIG
+          echo "CONFIG_RTL8812AU=m" >> $DEFCONFIG
+          
+          # NetHunter USB
+          echo "CONFIG_USB_CONFIGFS_F_HID=y" >> $DEFCONFIG
+          echo "CONFIG_USB_F_HID=y" >> $DEFCONFIG
+          echo "CONFIG_USB_USBNET=y" >> $DEFCONFIG
+          echo "CONFIG_USB_NET_RTL8152=y" >> $DEFCONFIG
+          
+          # NetHunter IPC
+          echo "CONFIG_SYSVIPC=y" >> $DEFCONFIG
+          echo "CONFIG_USER_NS=y" >> $DEFCONFIG
+          echo "CONFIG_BLK_DEV_LOOP=y" >> $DEFCONFIG
 
-          if [ -f "$DEFCONFIG" ]; then
-            echo "[+] Found defconfig at: $DEFCONFIG"
-
-            # ---------------------------------------------------------
-            # APatch Core Requirements
-            # ---------------------------------------------------------
-            echo "CONFIG_KALLSYMS=y" >> $DEFCONFIG
-            echo "CONFIG_KALLSYMS_ALL=y" >> $DEFCONFIG
-
-            # ---------------------------------------------------------
-            # Zygisk Next Prerequisites (for later APatch usage)
-            # ---------------------------------------------------------
-            echo "CONFIG_OVERLAY_FS=y" >> $DEFCONFIG
-            echo "CONFIG_TMPFS_XATTR=y" >> $DEFCONFIG
-            echo "CONFIG_SECURITY_SELINUX_DEVELOP=y" >> $DEFCONFIG
-
-            # ---------------------------------------------------------
-            # NetHunter: Wi-Fi Monitor Mode & Packet Injection
-            # ---------------------------------------------------------
-            echo "CONFIG_CFG80211=y" >> $DEFCONFIG
-            echo "CONFIG_MAC80211=y" >> $DEFCONFIG
-            echo "CONFIG_MAC80211_MESH=y" >> $DEFCONFIG
-            echo "CONFIG_CFG80211_WEXT=y" >> $DEFCONFIG
-            echo "CONFIG_WLAN_VENDOR_ATH=y" >> $DEFCONFIG
-            echo "CONFIG_WLAN_VENDOR_REALTEK=y" >> $DEFCONFIG
-            echo "CONFIG_WLAN_VENDOR_RALINK=y" >> $DEFCONFIG
-            echo "CONFIG_ATH9K_HTC=m" >> $DEFCONFIG
-            echo "CONFIG_RTL8188EU=m" >> $DEFCONFIG
-            echo "CONFIG_RTL8812AU=m" >> $DEFCONFIG
-            echo "CONFIG_RTL88x2BU=m" >> $DEFCONFIG
-            echo "CONFIG_RT2800USB=m" >> $DEFCONFIG
-            echo "CONFIG_RT2X00=m" >> $DEFCONFIG
-
-            # ---------------------------------------------------------
-            # NetHunter: USB Ethernet OTG
-            # ---------------------------------------------------------
-            echo "CONFIG_USB_NET_DRIVERS=y" >> $DEFCONFIG
-            echo "CONFIG_USB_USBNET=y" >> $DEFCONFIG
-            echo "CONFIG_USB_NET_AX88179_178A=y" >> $DEFCONFIG
-            echo "CONFIG_USB_NET_RTL8152=y" >> $DEFCONFIG
-            echo "CONFIG_USB_NET_CDCETHER=y" >> $DEFCONFIG
-            echo "CONFIG_USB_NET_CDC_NCM=y" >> $DEFCONFIG
-
-            # ---------------------------------------------------------
-            # NetHunter: BadUSB / HID
-            # ---------------------------------------------------------
-            echo "CONFIG_USB_CONFIGFS_F_HID=y" >> $DEFCONFIG
-            echo "CONFIG_USB_F_HID=y" >> $DEFCONFIG
-            echo "CONFIG_USB_CONFIGFS_MASS_STORAGE=y" >> $DEFCONFIG
-
-            # ---------------------------------------------------------
-            # NetHunter: Bluetooth
-            # ---------------------------------------------------------
-            echo "CONFIG_BT_HCIBTUSB=y" >> $DEFCONFIG
-            echo "CONFIG_BT_HCIBTUSB_BCM=y" >> $DEFCONFIG
-            echo "CONFIG_BT_HCIBTUSB_RTL=y" >> $DEFCONFIG
-
-            # ---------------------------------------------------------
-            # NetHunter: SDR / DVB
-            # ---------------------------------------------------------
-            echo "CONFIG_MEDIA_SUPPORT=y" >> $DEFCONFIG
-            echo "CONFIG_MEDIA_USB_SUPPORT=y" >> $DEFCONFIG
-            echo "CONFIG_MEDIA_DIGITAL_TV_SUPPORT=y" >> $DEFCONFIG
-            echo "CONFIG_DVB_USB_V2=y" >> $DEFCONFIG
-            echo "CONFIG_DVB_USB_RTL28XXU=y" >> $DEFCONFIG
-
-            # ---------------------------------------------------------
-            # NetHunter: IPC & Namespaces (Chroot, Metasploit)
-            # ---------------------------------------------------------
-            echo "CONFIG_SYSVIPC=y" >> $DEFCONFIG
-            echo "CONFIG_SYSVIPC_SYSCTL=y" >> $DEFCONFIG
-            echo "CONFIG_USER_NS=y" >> $DEFCONFIG
-            echo "CONFIG_PID_NS=y" >> $DEFCONFIG
-            echo "CONFIG_UTS_NS=y" >> $DEFCONFIG
-            echo "CONFIG_IPC_NS=y" >> $DEFCONFIG
-            echo "CONFIG_NET_NS=y" >> $DEFCONFIG
-            echo "CONFIG_BLK_DEV_LOOP=y" >> $DEFCONFIG
-
-            echo "[+] All NetHunter + APatch configs appended."
-          else
-            echo "❌ ERROR: Could not locate defconfig"
-            exit 1
-          fi
-
-      - name: ⚙️ Build Kernel
+      - name: Build Kernel
         run: |
-          export KBUILD_BUILD_USER="kb3122"
-          export KBUILD_BUILD_HOST="workspace"
           export PATH=$GITHUB_WORKSPACE/clang/bin:${PATH}
-          args="ARCH=arm64 \
-                LLVM=1 \
-                LLVM_IAS=1 \
-                O=../out \
-                CLANG_TRIPLE=aarch64-linux-gnu- \
-                CROSS_COMPILE=$GITHUB_WORKSPACE/aarch64-linux-android-4.9/bin/aarch64-linux-android- \
-                CROSS_COMPILE_ARM32=$GITHUB_WORKSPACE/arm-linux-androideabi-4.9/bin/arm-linux-androideabi-"
+          args="ARCH=arm64 LLVM=1 LLVM_IAS=1 O=../out CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=$GITHUB_WORKSPACE/aarch64-linux-android-4.9/bin/aarch64-linux-android- CROSS_COMPILE_ARM32=$GITHUB_WORKSPACE/arm-linux-androideabi-4.9/bin/arm-linux-androideabi-"
+          
           cd kernel-source
-
-          echo "=== Generating .config ==="
           make ${args} vendor/xiaomi/miatoll_defconfig
-
-          echo "=== Verifying KALLSYMS ==="
-          grep -E "CONFIG_KALLSYMS=|CONFIG_KALLSYMS_ALL=" ../out/.config || echo "⚠️ WARNING: KALLSYMS not set!"
-
-          echo "=== Building kernel ==="
           make -j$(nproc) ${args}
 
-      - name: 📦 Package with AnyKernel3
+      - name: Package AnyKernel3
         run: |
-          # Clone AnyKernel3
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git AnyKernel3
           rm -rf AnyKernel3/.git* AnyKernel3/LICENSE AnyKernel3/README.md
-
-          # ---- Write a clean, NetHunter-only anykernel.sh ----
-          cat > AnyKernel3/anykernel.sh << 'EOF'
-### AnyKernel3 Ramdisk Mod Script
-## Miatoll NetHunter Kernel (APatch Ready)
-
-### AnyKernel setup
-properties() { '
-kernel.string=Miatoll NetHunter Kernel (APatch Ready)
-do.devicecheck=1
-do.modules=0
-do.systemless=0
-do.cleanup=1
-do.cleanuponabort=0
-device.name1=curtana
-device.name2=joyeuse
-device.name3=excalibur
-device.name4=gram
-device.name5=miatoll
-supported.versions=
-supported.patchlevels=
-supported.vendorpatchlevels=
-'; } # end properties
-
-### AnyKernel install
-BLOCK=boot;
-block=boot;
-IS_SLOT_DEVICE=0;
-is_slot_device=0;
-RAMDISK_COMPRESSION=auto;
-ramdisk_compression=auto;
-PATCH_VBMETA_FLAG=0;
-patch_vbmeta_flag=0;
-NO_VBMETA_PARTITION_PATCH=1;
-no_vbmeta_partition_patch=1;
-
-. tools/ak3-core.sh;
-
-split_boot;
-rm -f $SPLITIMG/avb* $SPLITIMG/*.avb 2>/dev/null;
-flash_boot;
-EOF
-
-          # ---- Copy kernel image ----
-          IMG_PATH="out/arch/arm64/boot"
-          if [ -d "kernel-source/out/arch/arm64/boot" ]; then
-            IMG_PATH="kernel-source/out/arch/arm64/boot"
-          fi
           
+          # Decode the base64 string into anykernel.sh (No YAML syntax errors!)
+          echo "IyMjIEFueUtlcm5lbDQgUmFtZGlzayBNb2QgU2NyaXB0CiMjIE1pYXRvbGwgTmV0SHVudGVyIEtlcm5lbCAoQVBBdGNoIFJlYWR5KQoKIyMjIEFueUtlcm5lbCBzZXR1cApwcm9wZXJ0aWVzKCkgeyAnCmtlcm5lbC5zdHJpbmc9TWlhdG9sbCBOZXRIdW50ZXIgS2VybmVsIChBUEF0Y2ggUmVhZHkpCmRvLmRldmljZWNoZWNrPTEKZG8ubW9kdWxlcz0wCmRvLnN5c3RlbWxlc3M9MApkby5jbGVhbnVwPTEKZG8uY2xlYW51cG9uYWJvcnQ9MApkZXZpY2UubmFtZTE9Y3VydGFuYQpkZXZpY2UubmFtZTI9am95ZXVzZQpkZXZpY2UubmFtZTM9ZXhjYWxpYnVyCmRldmljZS5uYW1lND1ncmFtCmRldmljZS5uYW1lNT1taWF0b2xsCnN1cHBvcnRlZC52ZXJzaW9ucz0Kc3VwcG9ydGVkLnBhdGNobGV2ZWxzPQpzdXBwb3J0ZWQudmVuZG9ycGF0Y2hsZXZlbHM9Cic7IH0gIyBlbmQgcHJvcGVydGllcwoKIyMjIEFueUtlcm5lbCBpbnN0YWxsCkJMT0NLPWJvb3Q7CmJsb2NrPWJvb3Q7CklTX1NMT1RfREVWSUNFPTA7CmlzX3Nsb3RfZGV2aWNlPTA7ClJBTURJU0tfQ09NUFJFU1NJT049YXV0bzsKcmFtZGlza19jb21wcmVzc2lvbj1hdXRvOwpQQVRDSF9WQk1FVEFfRkxBRz0wOwpwYXRjaF92Ym1ldGFfZmxhZz0wOwpOT19WQk1FVEFfUEFSVElUSU9OX1BBVENIPTE7Cm5vX3ZibWV0YV9wYXJ0aXRpb25fcGF0Y2g9MTsKCi4gdG9vbHMvYWszLWNvcmUuc2g7CgpzcGxpdF9ib290OwpybSAtZiAkU1BMSVRJTUcvYXZiKiAkU1BMSVRJTUcvKi5hdmIgMj4vZGV2L251bGw7CmZsYXNoX2Jvb3Q7" | base64 -d > AnyKernel3/anykernel.sh
+
+          IMG_PATH="kernel-source/out/arch/arm64/boot"
           for img in Image.gz-dtb Image-dtb Image.gz Image; do
             if [[ -f $IMG_PATH/$img ]]; then
               cp $IMG_PATH/$img AnyKernel3/$img
-              echo "[+] Copied $img"
               break
             fi
           done
           if [[ -f $IMG_PATH/dtbo.img ]]; then
             cp $IMG_PATH/dtbo.img AnyKernel3/dtbo.img
-            echo "[+] Copied dtbo.img"
           fi
 
-          # ---- Zip ----
-          DATE=$(date +'%Y-%m-%d_%H-%M')
-          ZIP_NAME="Miatoll-NetHunter-APatch-${DATE}.zip"
           cd AnyKernel3
-          zip -r9 "../${ZIP_NAME}" .
-          cd ..
-          echo "[+] Created ${ZIP_NAME}"
+          zip -r9 ../NetHunter-APatch.zip .
 
-      - name: ☁️ Upload Artifact
+      - name: Upload
         uses: actions/upload-artifact@v4
         with:
-          name: Miatoll-NetHunter-APatch
-          path: |
-            *.zip
-            AnyKernel3/*.zip
-            kernel-source/out/arch/arm64/boot/Image*
-            kernel-source/out/arch/arm64/boot/dtbo.img
+          name: NetHunter-APatch
+          path: NetHunter-APatch.zip
